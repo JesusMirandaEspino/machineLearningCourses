@@ -9,8 +9,12 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import keras_tuner as kt
 from sklearn.datasets import fetch_california_housing
 from sklearn.model_selection import train_test_split
+from pathlib import Path
+from time import strftime
+
 
 fashon_mnist = tf.keras.datasets.fashion_mnist.load_data()
 (X_train_full, y_train_full), (X_test, y_test) = fashon_mnist
@@ -213,17 +217,179 @@ print(y_pred_tuple)
 y_pred = dict( zip(model.output_names, y_pred_tuple) )
 print(y_pred)
 
+tf.keras.backend.clear_session()
+tf.random.set_seed(42)
+
+
+class WideAndDeepModel(tf.keras.Model):
+    def __init__( self, units=30, activation="relu", **kwargs ):
+        super().__init__(**kwargs)
+        self.norm_layer_wide = tf.keras.layers.Normalization()
+        self.norm_layer_deep = tf.keras.layers.Normalization()
+        self.hidden1 = tf.keras.layers.Dense(units, activation)
+        self.hidden2 = tf.keras.layers.Dense(units, activation)
+        self.main_output = tf.keras.layers.Dense(1)
+        self.aux_output = tf.keras.layers.Dense(1)
+        
+    def call(self, inputs):
+        input_wide, input_deep = inputs
+        norm_wide = self.norm_layer_wide(input_wide)
+        norm_deep = self.norm_layer_deep(input_deep)
+        hidden1 = self.hidden1(norm_deep)
+        hidden2 = self.hidden2(hidden1)
+        concat = tf.keras.layers.concatenate( [norm_wide, hidden2] )
+        output = self.main_output(concat)
+        aux_output = self.aux_output(hidden2)
+        return output, aux_output
+
+
+
+
+model = WideAndDeepModel(30, activation="relu", name="my_cool_model")
+
+
+def get_run_logdir(root_logdir="my_logs"):
+    return Path(root_logdir) / strftime("run_%Y_%m_%d_%H_%M_%S")
+
+run_logdir = get_run_logdir()
 
 
 
 
 
 
+tf.keras.backend.clear_session()
+tf.random.set_seed(42)
+
+
+
+input_wide = tf.keras.layers.Input(shape=[5])  # features 0 to 4
+input_deep = tf.keras.layers.Input(shape=[6])  # features 2 to 7
+norm_layer_wide = tf.keras.layers.Normalization()
+norm_layer_deep = tf.keras.layers.Normalization()
+norm_wide = norm_layer_wide(input_wide)
+norm_deep = norm_layer_deep(input_deep)
+hidden1 = tf.keras.layers.Dense(30, activation="relu")(norm_deep)
+hidden2 = tf.keras.layers.Dense(30, activation="relu")(hidden1)
+concat = tf.keras.layers.concatenate([norm_wide, hidden2])
+output = tf.keras.layers.Dense(1)(concat)
+aux_output = tf.keras.layers.Dense(1)(hidden2)
+model = tf.keras.Model(inputs=[input_wide, input_deep],
+                       outputs=[output, aux_output])
+
+
+
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+model.compile(loss=("mse", "mse"), loss_weights=(0.9, 0.1), optimizer=optimizer,
+              metrics=["RootMeanSquaredError", "RootMeanSquaredError"])
+
+
+norm_layer_wide.adapt( X_train_wide )
+norm_layer_deep.adapt( X_train_deep )
+
+
+tensorboar_db = tf.keras.callbacks.TensorBoard( run_logdir, profile_batch=(100,200) )
+
+
+history = model.fit( ( X_train_wide, X_train_deep ), (y_train, y_train), epochs=20, 
+                    validation_data=((X_valid_wide, X_valid_deep), (y_valid,y_valid) ), callbacks=[tensorboar_db])
+
+
+
+fashion_mnist = tf.keras.datasets.fashion_mnist.load_data()
+(X_train_full, y_train_full), (X_test, y_test) = fashion_mnist
+X_train, y_train = X_train_full[:-5000], y_train_full[:-5000]
+X_valid, y_valid = X_train_full[-5000:], y_train_full[-5000:]
+
+tf.keras.backend.clear_session()
+tf.random.set_seed(42)
 
 
 
 
 
+def build_model(hp):
+    n_hidden = hp.Int("n_hidden", min_value=0, max_value=8, default=2)
+    n_neurons = hp.Int("n_neurons", min_value=16, max_value=256)
+    learning_rate = hp.Float("learning_rate", min_value=1e-4, max_value=1e-2,
+                             sampling="log")
+    optimizer = hp.Choice("optimizer", values=["sgd", "adam"])
+    if optimizer == "sgd":
+        optimizer = tf.keras.optimizers.SGD(learning_rate=learning_rate)
+    else:
+        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Flatten())
+    for _ in range(n_hidden):
+        model.add(tf.keras.layers.Dense(n_neurons, activation="relu"))
+    model.add(tf.keras.layers.Dense(10, activation="softmax"))
+    model.compile(loss="sparse_categorical_crossentropy", optimizer=optimizer,
+                  metrics=["accuracy"])
+    return model
+
+
+
+
+random_search_tuner = kt.RandomSearch(
+    build_model, objective="val_accuracy", max_trials=5, overwrite=True,
+    directory="C:/Users/jesus/IA/machinelearning/machinelearningbook/archivos/my_fashion_mnist", project_name="my_rnd_search", seed=42)
+random_search_tuner.search(X_train, y_train, epochs=10,
+                           validation_data=(X_valid, y_valid))
+
+top3_models = random_search_tuner.get_best_models(num_models=3)
+best_model = top3_models[0]
+
+
+top3_params = random_search_tuner.get_best_hyperparameters(num_trials=3)
+top3_params[0].values 
+
+
+
+best_trial = random_search_tuner.oracle.get_best_trials(num_trials=1)[0]
+best_trial.summary()
+
+best_trial.metrics.get_last_value("val_accuracy")
+
+
+
+best_model.fit(X_train_full, y_train_full, epochs=10)
+test_loss, test_accuracy = best_model.evaluate(X_test, y_test)
+
+
+class MyClassificationHyperModel(kt.HyperModel):
+    def build(self, hp):
+        return build_model(hp)
+
+    def fit(self, hp, model, X, y, **kwargs):
+        if hp.Boolean("normalize"):
+            norm_layer = tf.keras.layers.Normalization()
+            norm_layer.adapt(X)
+            X = norm_layer(X)
+        return model.fit(X, y, **kwargs)
+
+hyperband_tuner = kt.Hyperband(
+    MyClassificationHyperModel(), objective="val_accuracy", seed=42,
+    max_epochs=10, factor=3, hyperband_iterations=2,
+    overwrite=True, directory="my_fashion_mnist", project_name="hyperband")
+
+
+
+root_logdir = Path(hyperband_tuner.project_dir) / "tensorboard"
+tensorboard_cb = tf.keras.callbacks.TensorBoard(root_logdir)
+early_stopping_cb = tf.keras.callbacks.EarlyStopping(patience=2)
+hyperband_tuner.search(X_train, y_train, epochs=10,
+                       validation_data=(X_valid, y_valid),
+                       callbacks=[early_stopping_cb, tensorboard_cb])
+
+
+bayesian_opt_tuner = kt.BayesianOptimization(
+    MyClassificationHyperModel(), objective="val_accuracy", seed=42,
+    max_trials=10, alpha=1e-4, beta=2.6,
+    overwrite=True, directory="my_fashion_mnist", project_name="bayesian_opt")
+bayesian_opt_tuner.search(X_train, y_train, epochs=10,
+                          validation_data=(X_valid, y_valid),
+                          callbacks=[early_stopping_cb])
 
 
 
