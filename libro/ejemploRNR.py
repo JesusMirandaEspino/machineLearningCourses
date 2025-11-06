@@ -11,7 +11,9 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential
 from keras.layers import Dense, LSTM, Dropout
-
+import tensorflow as tf
+import math
+from sklearn.metrics import mean_squared_error
 
 dataset_train = pd.read_csv('C:/Users/jesus/IA/machinelearning/machinelearningbook/archivos/curso4/Google_Stock_Price_Train.csv')
 training_set = dataset_train.iloc[:, 1:2].values
@@ -25,14 +27,19 @@ training_set_scaled = sc.fit_transform(training_set)
 X_train = []
 y_train = []
 for i in range(60, 1258):
+    print(i, ": ", training_set_scaled[i-60:i, 0])
+    print(i, ": ", training_set_scaled[i, 0])
+    
     X_train.append(training_set_scaled[i-60:i, 0])
     y_train.append(training_set_scaled[i, 0])
 X_train, y_train = np.array(X_train), np.array(y_train)
 
 
+print(X_train, X_train.shape[0], X_train.shape[1])
+
 X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
 
-
+tf.keras.backend.clear_session()
 regressor = Sequential()
 
 print(X_train.shape)
@@ -90,6 +97,7 @@ plt.show()
 
 
 
+rmse = math.sqrt(mean_squared_error(real_stock_price, predicted_stock_price))
 
 
 
